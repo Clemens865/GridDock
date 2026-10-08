@@ -16,7 +16,6 @@ final class DragSnap {
 
     private var monitors: [Any] = []
     private var candidate: AXWindow?
-    private var startFrame: CGRect?
     private var isMoving = false
     private var active = false
     private var currentCell: Int?
@@ -32,26 +31,24 @@ final class DragSnap {
 
     private func mouseDown() {
         reset()
-        if suspended { return }
-        guard let w = AX.window(at: ScreenGeometry.mouseAX) else { return }
-        candidate = w
-        startFrame = w.frame
     }
 
     private func mouseDragged(_ e: NSEvent) {
-        guard let w = candidate, let start = startFrame else { return }
-        if !isMoving {
-            // A move changes origin but not size; a resize changes size. Only snap moves.
-            guard let now = w.frame, now.size == start.size, now.origin != start.origin else { return }
-            isMoving = true
-        }
+        if suspended { return }
         let wantsSnap = snapOnEveryDrag || e.modifierFlags.contains(.option)
         if !wantsSnap {
             if active { OverlayController.shared.hide(); active = false }
             return
         }
-        if !active { OverlayController.shared.showDrag(); active = true }
         let p = ScreenGeometry.mouseAX
+        if !isMoving {
+            // Look up the window only once a snap-drag is actually happening (not on every click).
+            // A title-bar drag has the cursor near the window's top edge; resizes and in-window drags don't.
+            guard let w = AX.window(at: p), let f = w.frame, p.y - f.minY < 44 else { return }
+            candidate = w
+            isMoving = true
+        }
+        if !active { OverlayController.shared.showDrag(); active = true }
         let screen = ScreenGeometry.screen(containingAX: p)
         let cell = GridManager.shared.cellIndex(atAX: p, on: screen)
         if cell != currentCell || screen != currentScreen {
@@ -73,7 +70,7 @@ final class DragSnap {
     }
 
     private func reset() {
-        candidate = nil; startFrame = nil; isMoving = false
+        candidate = nil; isMoving = false
         active = false; currentCell = nil; currentScreen = nil
     }
 }

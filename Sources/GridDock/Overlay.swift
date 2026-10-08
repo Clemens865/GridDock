@@ -29,8 +29,8 @@ final class OverlayView: NSView {
             (on ? NSColor.controlAccentColor : NSColor.white.withAlphaComponent(0.6)).setStroke()
             path.lineWidth = on ? 3 : 1.5
             path.stroke()
-            if showHints && i < 9 {
-                let label = "\(i + 1)" as NSString
+            if showHints, let text = CellKeys.label(i) {
+                let label = text as NSString
                 let attrs: [NSAttributedString.Key: Any] = [
                     .font: NSFont.systemFont(ofSize: min(72, r.height / 3), weight: .semibold),
                     .foregroundColor: NSColor.white.withAlphaComponent(0.9),
@@ -41,7 +41,7 @@ final class OverlayView: NSView {
         }
         if showHints {
             let dest = OverlayController.shared.pullHint.map { "\($0)   ·   " } ?? ""
-            let hint = "\(dest)\(layout.name)   ·   1–9 / click: place   ·   ⇧click: span   ·   Tab: next layout   ·   Esc: cancel" as NSString
+            let hint = "\(dest)\(layout.name)   ·   key / click: place   ·   ⇧click: span   ·   Tab: next layout   ·   Esc: cancel" as NSString
             let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 14, weight: .medium), .foregroundColor: NSColor.white]
             let size = hint.size(withAttributes: attrs)
             let box = CGRect(x: bounds.midX - size.width / 2 - 14, y: bounds.maxY - 64, width: size.width + 28, height: size.height + 14)
@@ -126,8 +126,9 @@ final class OverlayController {
         case 53: cancel()                                   // Esc
         case 48: GridManager.shared.cycleLayout()           // Tab
         default:
-            if let c = e.charactersIgnoringModifiers, let n = Int(c), n >= 1 {
-                pick(n - 1, on: screen, span: e.modifierFlags.contains(.shift))
+            if let c = e.charactersIgnoringModifiers, let i = CellKeys.index(for: c),
+               GridManager.shared.layout.cells.indices.contains(i) {
+                pick(i, on: screen, span: e.modifierFlags.contains(.shift))
             }
         }
     }
@@ -164,5 +165,19 @@ final class OverlayController {
         windows.forEach { $0.0.orderOut(nil) }
         windows = []
         isPicking = false
+    }
+}
+
+/// Keys for cells in the picker: 1–9, then 0, then A–Z (enough for a 6 × 6 grid).
+enum CellKeys {
+    private static let keys = Array("1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+    static func label(_ cell: Int) -> String? {
+        keys.indices.contains(cell) ? String(keys[cell]) : nil
+    }
+
+    static func index(for typed: String) -> Int? {
+        guard let ch = typed.uppercased().first else { return nil }
+        return keys.firstIndex(of: ch)
     }
 }

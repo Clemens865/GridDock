@@ -7,7 +7,7 @@ final class PageManager {
     static let shared = PageManager()
 
     struct Slot { let window: AXWindow; let cells: [Int] }
-    struct Page { var layout: GridLayout; var slots: [Slot] }
+    struct Page { var layout: GridLayout; var slots: [Slot]; var name: String? = nil }
 
     private(set) var pages: [Page] = []
     private(set) var current = 0
@@ -16,6 +16,7 @@ final class PageManager {
     private var scrollAccum: CGFloat = 0
     private var swipeFired = false
     private var monitor: Any?
+    private var focusTimer: Timer?
 
     private init() {
         pages = [Page(layout: GridManager.shared.layout, slots: [])]
@@ -30,6 +31,11 @@ final class PageManager {
             return GridManager.shared.occupancy(on: activeScreen).values.reduce(0) { $0 + $1.count }
         }
         return pages[index].slots.count
+    }
+
+    /// Stored window count of a page (no window lookups; the current page's may be stale).
+    func windowCount(ofStored index: Int) -> Int {
+        pages.indices.contains(index) ? pages[index].slots.count : 0
     }
 
     private var activeScreen: NSScreen { ScreenGeometry.screen(containingAX: ScreenGeometry.mouseAX) }
@@ -52,28 +58,64 @@ final class PageManager {
         }
     }
 
-    private func show(_ index: Int, on screen: NSScreen) {
+    private func show(_ index: Int, on screen: NSScreen, focus: AXWindow? = nil) {
         current = index
         GridManager.shared.layout = pages[index].layout
         let alive = pages[index].slots.filter { $0.window.frame != nil }   // drop closed windows
         pages[index].slots = alive
         for s in alive { GridManager.shared.place(s.window, inCells: s.cells, on: screen) }
         currentWindows = alive.sorted { ($0.cells.first ?? 0) < ($1.cells.first ?? 0) }.map(\.window)
-        alive.last?.window.focus()
+        (focus ?? alive.last?.window)?.focus()
         PageHUD.shared.flash()
     }
 
-    func go(to index: Int) {
+    func go(to index: Int, focus: AXWindow? = nil) {
         guard pages.indices.contains(index), index != current else { return }
         let screen = activeScreen
         stashCurrent(on: screen)
         // Empty pages you leave behind disappear (except the last remaining one).
         let leaving = current
-        show(index, on: screen)
+        show(index, on: screen, focus: focus)
         if pages[leaving].slots.isEmpty && pages.count > 1 {
             pages.remove(at: leaving)
             if leaving < current { current -= 1 }
             PageHUD.shared.flash()
+        }
+        save()
+    }
+
+    func pageIndex(of w: AXWindow) -> Int? {
+        if currentWindows.contains(where: { $0.isSame(w) }) { return current }
+        return pages.indices.first { i in pages[i].slots.contains { $0.window.isSame(w) } }
+    }
+
+    func title(of index: Int) -> String {
+        pages.indices.contains(index) ? (pages[index].name ?? "Page \(index + 1)") : ""
+    }
+
+    // MARK: Follow focus
+
+    /// When ⌘-Tab, the Dock or a notification focuses a window parked on another page,
+    /// switch to that page instead of leaving you looking at nothing.
+    func startFollowFocus() {
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification,
+                                                          object: nil, queue: .main) { [weak self] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self?.followFocus() }
+        }
+        // Also catches window switches inside one app (⌘`), which don't activate a new app.
+        focusTimer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: true) { [weak self] _ in self?.followFocus() }
+    }
+
+    private func followFocus() {
+        guard !OverlayController.shared.isPicking, NSEvent.pressedMouseButtons == 0,
+              let w = AX.focusedWindow(), let f = w.frame, ScreenGeometry.isParked(f) else { return }
+        if let i = pageIndex(of: w), i != current {
+            go(to: i, focus: w)
+        } else {
+            // Parked but on no page (e.g. pages were reset): bring it into the visible page.
+            tile(currentWindows + [w])
+            w.focus()
+            save()
         }
     }
 
@@ -87,6 +129,7 @@ final class PageManager {
         pages.insert(Page(layout: GridManager.shared.layout, slots: []), at: current + 1)
         current += 1
         currentWindows = []
+        save()
         PageHUD.shared.flash()
     }
 
@@ -112,7 +155,8 @@ final class PageManager {
             pages[target].slots = (pages[target].slots.map(\.window) + [w]).enumerated().map { Slot(window: $1, cells: [$0]) }
         }
         w.setFrame(CGRect(origin: ScreenGeometry.parkingPoint(on: screen), size: size))
-        PageHUD.shared.flash(message: "Sent to page \(target + 1)")
+        PageHUD.shared.flash(message: "Sent to \(title(of: target))")
+        save()
     }
 
     // MARK: Tile all
@@ -124,8 +168,8 @@ final class PageManager {
         let screenAX = ScreenGeometry.flip(screen.frame)
         // Keep windows already in cells in their order, then add the rest.
         let occ = gm.occupancy(on: screen)
-        var ordered = occ.keys.sorted().flatMap { occ[$0] ?? [] }
-        for w in AX.visibleWindows() where !ordered.contains(where: { $0.isSame(w) }) {
+        var ordered = occ.keys.sorted().flatMap { occ[$0] ?? [] }.filter(Rules.tiles)
+        for w in AX.visibleWindows() where Rules.tiles(w) && !ordered.contains(where: { $0.isSame(w) }) {
             if let f = w.frame, screenAX.contains(CGPoint(x: f.midX, y: f.midY)) { ordered.append(w) }
         }
         guard !ordered.isEmpty else { NSSound.beep(); return }
@@ -142,16 +186,20 @@ final class PageManager {
         let vf = screen.visibleFrame
         gm.layout = .auto(count: windows.count, screenAspect: vf.width / max(vf.height, 1))
         for (i, w) in windows.enumerated() { gm.place(w, inCells: [i], on: screen) }
+        pages[current].layout = gm.layout
+        pages[current].slots = windows.enumerated().map { Slot(window: $1, cells: [$0]) }
+        save()
     }
 
     /// Replaces all pages: group 0 is shown, the others are parked off-screen.
-    func rebuild(_ groups: [[AXWindow]]) {
+    func rebuild(_ groups: [[AXWindow]], names: [String?] = []) {
         let screen = activeScreen
         let park = ScreenGeometry.parkingPoint(on: screen)
         let aspect = screen.visibleFrame.width / max(screen.visibleFrame.height, 1)
-        pages = groups.map { g in
+        pages = groups.enumerated().map { i, g in
             Page(layout: .auto(count: g.count, screenAspect: aspect),
-                 slots: g.enumerated().map { Slot(window: $1, cells: [$0]) })
+                 slots: g.enumerated().map { Slot(window: $1, cells: [$0]) },
+                 name: names.indices.contains(i) ? names[i] : nil)
         }
         if pages.isEmpty { pages = [Page(layout: GridManager.shared.layout, slots: [])] }
         current = 0
@@ -204,7 +252,7 @@ final class PageManager {
     // MARK: Safety
 
     /// Brings back every parked window (on quit, or after a crash left windows off-screen).
-    func unparkAll() {
+    func unparkAll(resetPages: Bool = true) {
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let vf = ScreenGeometry.flip(screen.visibleFrame)
         var offset: CGFloat = 0
@@ -214,9 +262,75 @@ final class PageManager {
             w.setFrame(CGRect(origin: CGPoint(x: vf.minX + 60 + offset, y: vf.minY + 40 + offset), size: size))
             offset += 30
         }
+        guard resetPages else { return }
         pages = [Page(layout: GridManager.shared.layout, slots: [])]
         current = 0
         currentWindows = []
+        save()
+    }
+}
+
+// MARK: - Saving pages (so they survive a GridDock restart or update)
+
+extension PageManager {
+    private struct SavedSlot: Codable { let windowID: UInt32?; let bundleID: String?; let title: String; let cells: [Int] }
+    private struct SavedPage: Codable { let name: String?; let layoutName: String; let slots: [SavedSlot] }
+    private struct Saved: Codable { let current: Int; let pages: [SavedPage] }
+
+    private static var fileURL: URL {
+        ProjectLayoutStore.shared.fileURL.deletingLastPathComponent().appendingPathComponent("pages.json")
+    }
+
+    func save() {
+        let saved = Saved(current: current, pages: pages.map { p in
+            SavedPage(name: p.name, layoutName: p.layout.name, slots: p.slots.map { s in
+                SavedSlot(windowID: Spaces.windowID(s.window), bundleID: s.window.bundleID, title: s.window.title, cells: s.cells)
+            })
+        })
+        try? JSONEncoder().encode(saved).write(to: Self.fileURL)
+    }
+
+    /// Rebuilds the saved pages from the windows that still exist (matched by window ID, then app + title),
+    /// re-parks windows of hidden pages, and brings back any parked window that no page claims.
+    func restore() {
+        defer { save() }
+        guard let data = try? Data(contentsOf: Self.fileURL),
+              let saved = try? JSONDecoder().decode(Saved.self, from: data), !saved.pages.isEmpty else {
+            unparkAll(); return
+        }
+        var pool = AX.allWindows()
+        func take(_ s: SavedSlot) -> AXWindow? {
+            let i = pool.firstIndex { w in s.windowID != nil && Spaces.windowID(w) == s.windowID }
+                ?? pool.firstIndex { $0.bundleID == s.bundleID && $0.title == s.title }
+            return i.map { pool.remove(at: $0) }
+        }
+        var restored: [Page] = []
+        for p in saved.pages {
+            let layout = GridLayout.resolve(p.layoutName) ?? GridManager.shared.layout
+            let slots = p.slots.compactMap { s in take(s).map { Slot(window: $0, cells: s.cells) } }
+            if !slots.isEmpty || restored.isEmpty { restored.append(Page(layout: layout, slots: slots, name: p.name)) }
+        }
+        pages = restored
+        current = min(max(saved.current, 0), pages.count - 1)
+
+        let screen = activeScreen
+        let park = ScreenGeometry.parkingPoint(on: screen)
+        for (i, page) in pages.enumerated() where i != current {
+            for s in page.slots { if let size = s.window.frame?.size { s.window.setFrame(CGRect(origin: park, size: size)) } }
+        }
+        GridManager.shared.layout = pages[current].layout
+        for s in pages[current].slots { GridManager.shared.place(s.window, inCells: s.cells, on: screen) }
+        currentWindows = pages[current].slots.sorted { ($0.cells.first ?? 0) < ($1.cells.first ?? 0) }.map(\.window)
+
+        // Parked windows nobody claims anymore come back on screen.
+        let vf = ScreenGeometry.flip(screen.visibleFrame)
+        var offset: CGFloat = 0
+        for w in pool {
+            guard let f = w.frame, ScreenGeometry.isParked(f) else { continue }
+            w.setFrame(CGRect(x: vf.minX + 60 + offset, y: vf.minY + 40 + offset,
+                              width: min(f.width, vf.width * 0.6), height: min(f.height, vf.height * 0.6)))
+            offset += 30
+        }
     }
 }
 
@@ -230,7 +344,7 @@ final class PageHUD {
     func flash(message: String? = nil) {
         let pm = PageManager.shared
         let dots = (0..<pm.pageCount).map { $0 == pm.current ? "●" : "○" }.joined(separator: " ")
-        let text = message ?? "\(dots)    Page \(pm.current + 1) / \(pm.pageCount)  ·  \(GridManager.shared.layout.name)"
+        let text = message ?? "\(dots)    \(pm.title(of: pm.current))  (\(pm.current + 1)/\(pm.pageCount))  ·  \(GridManager.shared.layout.name)"
         if panel == nil {
             let p = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             p.isOpaque = false

@@ -23,29 +23,50 @@ final class DashboardModel: ObservableObject {
     @Published var layoutName = GridManager.shared.layout.name
     @Published var projects: [String] = []
     @Published var pageCounts: [Int] = []
+    @Published var pageTitles: [String] = []
     @Published var currentPage = 0
 
+    private var refreshing = false
+
     func refresh() {
+        guard !refreshing else { return }
+        refreshing = true
         let gm = GridManager.shared
-        let screen = gm.screen(for: nil)
-        let occupancy = gm.occupancy(on: screen)
-        func info(_ w: AXWindow) -> WinInfo {
-            WinInfo(window: w, appName: w.appName, title: w.title, icon: w.app?.icon)
-        }
-        cells = gm.layout.cells.enumerated().map { i, r in
-            CellInfo(index: i, rect: r, windows: (occupancy[i] ?? []).map(info))
-        }
-        let placed = occupancy.values.flatMap { $0 }
-        // Includes fullscreen windows and windows on other Spaces ("Place in…" pulls fullscreen ones back).
-        unplaced = AX.allWindows().filter { w in
-            guard let f = w.frame, !ScreenGeometry.isParked(f) else { return false }
-            return !placed.contains { $0.isSame(w) }
-        }.map(info)
         let pm = PageManager.shared
-        pageCounts = (0..<pm.pageCount).map { pm.windowCount(of: $0) }
-        currentPage = pm.current
-        layoutName = gm.layout.name
+        let screen = gm.screen(for: nil)
+        let layout = gm.layout
+        let current = pm.current
+        let stored = (0..<pm.pageCount).map { pm.windowCount(ofStored: $0) }
+        pageTitles = (0..<pm.pageCount).map { pm.title(of: $0) }
+        currentPage = current
+        layoutName = layout.name
         projects = ProjectLayoutStore.shared.layouts.map(\.name)
+
+        // Asking apps about their windows can be slow — do it off the main thread.
+        Task.detached(priority: .userInitiated) {
+            func info(_ w: AXWindow) -> WinInfo {
+                WinInfo(window: w, appName: w.appName, title: w.title, icon: w.app?.icon)
+            }
+            let occupancy = gm.occupancy(on: screen)
+            let cells = layout.cells.enumerated().map { i, r in
+                CellInfo(index: i, rect: r, windows: (occupancy[i] ?? []).map(info))
+            }
+            let placed = occupancy.values.flatMap { $0 }
+            // Includes fullscreen windows and windows on other Spaces ("Place in…" pulls them over).
+            let unplaced = AX.allWindows().filter { w in
+                guard let f = w.frame, !ScreenGeometry.isParked(f) else { return false }
+                return !placed.contains { $0.isSame(w) }
+            }.map(info)
+            var live = stored
+            if live.indices.contains(current) { live[current] = placed.count }
+            let counts = live
+            await MainActor.run {
+                self.cells = cells
+                self.unplaced = unplaced
+                self.pageCounts = counts
+                self.refreshing = false
+            }
+        }
     }
 }
 
@@ -84,7 +105,7 @@ struct DashboardView: View {
             HStack(spacing: 6) {
                 Button { PageManager.shared.previous(); refreshSoon() } label: { Image(systemName: "chevron.left") }
                 ForEach(Array(model.pageCounts.enumerated()), id: \.offset) { i, count in
-                    Button("Page \(i + 1) · \(count)") { PageManager.shared.go(to: i); refreshSoon() }
+                    Button("\(model.pageTitles.indices.contains(i) ? model.pageTitles[i] : "Page \(i + 1)") · \(count)") { PageManager.shared.go(to: i); refreshSoon() }
                         .buttonStyle(.bordered)
                         .tint(i == model.currentPage ? .accentColor : .secondary)
                 }

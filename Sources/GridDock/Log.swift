@@ -6,6 +6,12 @@ enum Log {
         .appendingPathComponent("Logs/GridDock.log")
     private static let stamp: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"; return f }()
 
+    /// Starts a fresh log once it passes 1 MB.
+    static func trimIfLarge() {
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        if size > 1_000_000 { try? FileManager.default.removeItem(at: url) }
+    }
+
     static func write(_ message: String) {
         let line = "\(stamp.string(from: Date()))  \(message)\n"
         guard let data = line.data(using: .utf8) else { return }

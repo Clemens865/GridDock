@@ -42,6 +42,21 @@ struct GridLayout: Codable, Equatable {
         return GridLayout(name: "Auto (\(n))", cells: cells)
     }
 
+    /// Splits items into the fewest pages of at most `perPage`, as evenly as possible (14 by 6 → 5, 5, 4).
+    static func balancedChunks<T>(_ items: [T], perPage: Int) -> [[T]] {
+        guard !items.isEmpty, perPage > 0 else { return [] }
+        let pageCount = Int(ceil(Double(items.count) / Double(perPage)))
+        let base = items.count / pageCount, extra = items.count % pageCount
+        var chunks: [[T]] = []
+        var i = 0
+        for p in 0..<pageCount {
+            let size = base + (p < extra ? 1 : 0)
+            chunks.append(Array(items[i..<(i + size)]))
+            i += size
+        }
+        return chunks
+    }
+
     /// Rebuilds a layout from its name: presets, "C × R" custom grids and "Auto (n)".
     static func resolve(_ name: String) -> GridLayout? {
         if let p = presets.first(where: { $0.name == name }) { return p }

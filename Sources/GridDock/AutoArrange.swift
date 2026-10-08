@@ -126,7 +126,7 @@ final class AutoArrange {
         let screenAX = ScreenGeometry.flip(screen.frame)
         let wins = AX.visibleWindows().filter { w in
             guard let f = w.frame else { return false }
-            return screenAX.contains(CGPoint(x: f.midX, y: f.midY))
+            return screenAX.contains(CGPoint(x: f.midX, y: f.midY)) && Rules.tiles(w)
         }
         guard !wins.isEmpty else { PageHUD.shared.flash(message: "No windows to arrange"); return }
 
@@ -135,15 +135,8 @@ final class AutoArrange {
         for w in wins where !order.contains(w.pid) { order.append(w.pid) }
         let grouped = order.flatMap { pid in wins.filter { $0.pid == pid } }
 
-        let pageCount = Int(ceil(Double(grouped.count) / Double(perPage)))
-        let base = grouped.count / pageCount, extra = grouped.count % pageCount
-        var chunks: [[AXWindow]] = []
-        var i = 0
-        for p in 0..<pageCount {
-            let size = base + (p < extra ? 1 : 0)
-            chunks.append(Array(grouped[i..<(i + size)]))
-            i += size
-        }
+        let chunks = GridLayout.balancedChunks(grouped, perPage: perPage)
+        let pageCount = chunks.count
         PageManager.shared.rebuild(chunks)
         PageHUD.shared.flash(message: "Arranged \(grouped.count) windows on \(pageCount) page\(pageCount == 1 ? "" : "s")")
     }
@@ -162,16 +155,31 @@ final class AutoArrange {
         timer = nil
     }
 
+    private var scanning = false
+
     private func tick() {
-        guard enabled, !busy, !Self.stageManagerOn, !OverlayController.shared.isPicking, NSEvent.pressedMouseButtons == 0 else { return }
+        guard enabled, !busy, !scanning, !Self.stageManagerOn, !OverlayController.shared.isPicking,
+              NSEvent.pressedMouseButtons == 0 else { return }
         if Spaces.isAvailable, let home = Spaces.home, Spaces.current != home { return }  // you're in a fullscreen app or elsewhere
 
-        let pm = PageManager.shared
+        // Asking every app for its windows can be slow (a busy app answers late), so do it off the main thread.
+        scanning = true
         let screenAX = ScreenGeometry.flip(gridScreen.frame)
-        let visible = AX.visibleWindows().filter { w in
-            guard let f = w.frame else { return false }
-            return screenAX.contains(CGPoint(x: f.midX, y: f.midY))
+        Task.detached(priority: .userInitiated) {
+            let visible = AX.visibleWindows().filter { w in
+                guard let f = w.frame else { return false }
+                return screenAX.contains(CGPoint(x: f.midX, y: f.midY)) && Rules.tiles(w)
+            }
+            await MainActor.run {
+                AutoArrange.shared.scanning = false
+                AutoArrange.shared.apply(visible)
+            }
         }
+    }
+
+    private func apply(_ visible: [AXWindow]) {
+        guard enabled, !busy, NSEvent.pressedMouseButtons == 0 else { return }
+        let pm = PageManager.shared
         let cur = pm.currentWindows
         let alive = cur.filter { w in visible.contains { $0.isSame(w) } }
         let new = visible.filter { v in !cur.contains { $0.isSame(v) } }

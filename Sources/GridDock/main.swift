@@ -13,6 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         statusItem.menu = menu
 
+        Log.trimIfLarge()
+        // Never wait more than half a second on an app that doesn't answer (default is 6 s).
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.5)
         Hotkeys.shared.registerDefaults { DashboardWindow.shared.show() }
 
         if AX.isTrusted {
@@ -33,12 +36,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func startMonitors() {
         DragSnap.shared.start()
         PageManager.shared.startSwipeMonitor()
-        PageManager.shared.unparkAll()   // rescue windows left off-screen by a crash
+        PageManager.shared.restore()     // pages from last run; stray parked windows come back
+        PageManager.shared.startFollowFocus()
         if AutoArrange.shared.enabled { AutoArrange.shared.startWatching() }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        PageManager.shared.unparkAll()   // never leave windows parked off-screen
+        PageManager.shared.save()
+        PageManager.shared.unparkAll(resetPages: false)   // never leave windows off-screen; pages are restored next launch
     }
 
     // Rebuilt every time the menu opens, so it always reflects current state.
@@ -94,7 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let pm = PageManager.shared
         let pagesMenu = NSMenu()
         for i in 0..<pm.pageCount {
-            let mi = item("Page \(i + 1)  (\(pm.windowCount(of: i)) windows)") { pm.go(to: i) }
+            let mi = item("\(pm.title(of: i))  (\(pm.windowCount(of: i)) windows)") { pm.go(to: i) }
             mi.state = i == pm.current ? .on : .off
             pagesMenu.addItem(mi)
         }
@@ -104,7 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pagesMenu.addItem(item("Send window to page:  ⌃⌥⇧← →") {})
         pagesMenu.addItem(.separator())
         pagesMenu.addItem(item("Bring all parked windows back") { pm.unparkAll() })
-        menu.addItem(submenu("Pages: \(pm.current + 1) / \(pm.pageCount)", pagesMenu))
+        menu.addItem(submenu("Pages: \(pm.title(of: pm.current)) (\(pm.current + 1)/\(pm.pageCount))", pagesMenu))
 
         let projects = NSMenu()
         let store = ProjectLayoutStore.shared
