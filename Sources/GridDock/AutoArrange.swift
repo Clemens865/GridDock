@@ -50,14 +50,68 @@ final class AutoArrange {
         return false
     }
 
-    func arrangeEverything() {
+    func arrangeEverything(byProject: Bool = false) {
         guard !busy, Self.checkStageManager() else { return }
         busy = true
         Task {
             defer { busy = false }
             await gatherAll()
-            arrangeOnGridDesktop()
+            byProject ? arrangeByProject() : arrangeOnGridDesktop()
         }
+    }
+
+    /// Project name for a folder: the folder right below "Software-Projects" (or similar roots),
+    /// otherwise the folder itself. The home folder itself belongs to no project.
+    nonisolated static func projectName(forPath path: String) -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        guard !path.isEmpty, path != home, path != "/" else { return nil }
+        let parts = (path as NSString).pathComponents
+        for root in ["Software-Projects", "Projects", "Developer", "Code", "src", "repos"] {
+            if let i = parts.firstIndex(of: root), parts.count > i + 1 { return parts[i + 1] }
+        }
+        return (path as NSString).lastPathComponent
+    }
+
+    /// One page per project: terminals by their folder (or Claude session), other windows by a
+    /// project name in their title. Everything else goes on a final "Other" page.
+    private func arrangeByProject() {
+        let screenAX = ScreenGeometry.flip(gridScreen.frame)
+        let wins = AX.visibleWindows().filter { w in
+            guard let f = w.frame else { return false }
+            return screenAX.contains(CGPoint(x: f.midX, y: f.midY)) && Rules.tiles(w)
+        }
+        guard !wins.isEmpty else { PageHUD.shared.flash(message: "No windows to arrange"); return }
+
+        let dirs = TerminalBridge.directoriesByWindowTitle()
+        var projectOf: [Int: String] = [:]
+        for (i, w) in wins.enumerated() where w.bundleID == ProjectLayoutStore.terminalBundleID {
+            let cwd = SessionMonitor.shared.session(for: w)?.cwd ?? dirs[w.title]
+            if let name = cwd.flatMap(Self.projectName(forPath:)) { projectOf[i] = name }
+        }
+        // Other apps join a project when their title mentions it (e.g. "TaxMex – Chrome", "Atelier").
+        let known = Set(projectOf.values).filter { $0.count >= 4 }
+        for (i, w) in wins.enumerated() where projectOf[i] == nil {
+            let title = w.title.lowercased()
+            if let match = known.first(where: { title.contains($0.lowercased()) }) { projectOf[i] = match }
+        }
+
+        var groups: [(String, [AXWindow])] = known.union(projectOf.values).sorted().map { name in
+            (name, wins.indices.filter { projectOf[$0] == name }.map { wins[$0] })
+        }
+        let rest = wins.indices.filter { projectOf[$0] == nil }.map { wins[$0] }
+        if !rest.isEmpty { groups.append(("Other", rest)) }
+
+        var chunks: [[AXWindow]] = []
+        var names: [String?] = []
+        for (name, ws) in groups where !ws.isEmpty {
+            let parts = GridLayout.balancedChunks(ws, perPage: perPage)
+            for (k, part) in parts.enumerated() {
+                chunks.append(part)
+                names.append(parts.count > 1 ? "\(name) \(k + 1)" : name)
+            }
+        }
+        PageManager.shared.rebuild(chunks, names: names)
+        PageHUD.shared.flash(message: "\(groups.count) project pages: " + groups.map(\.0).joined(separator: " · "))
     }
 
     /// Windows that live on a Space other than the grid desktop: (pid, window id, space).

@@ -46,7 +46,9 @@ final class Hotkeys {
         register(keyCode: kVK_ANSI_N, modifiers: mods) { pm.newPage() }
         register(keyCode: kVK_ANSI_T, modifiers: mods) { pm.tileAll() }
         register(keyCode: kVK_ANSI_H, modifiers: mods) { ShortcutSheet.shared.toggle() }
+        register(keyCode: kVK_ANSI_W, modifiers: mods) { Task { @MainActor in SessionMonitor.shared.jumpToWaiting() } }
         register(keyCode: kVK_ANSI_A, modifiers: mods) { Task { @MainActor in AutoArrange.shared.arrangeEverything() } }
+        register(keyCode: kVK_ANSI_P, modifiers: mods) { Task { @MainActor in AutoArrange.shared.arrangeEverything(byProject: true) } }
         register(keyCode: kVK_ANSI_G, modifiers: mods) { OverlayController.shared.showPicker() }
         register(keyCode: kVK_ANSI_L, modifiers: mods) { GridManager.shared.cycleLayout() }
         register(keyCode: kVK_ANSI_D, modifiers: mods, dashboard)

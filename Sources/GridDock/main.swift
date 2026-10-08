@@ -18,6 +18,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.5)
         Hotkeys.shared.registerDefaults { DashboardWindow.shared.show() }
 
+        // Menu-bar badge: how many Claude sessions are waiting for you.
+        NotificationCenter.default.addObserver(forName: .claudeSessionsChanged, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                let n = SessionMonitor.shared.waitingCount
+                self?.statusItem.length = n > 0 ? NSStatusItem.variableLength : NSStatusItem.squareLength
+                self?.statusItem.button?.title = n > 0 ? " \(n)" : ""
+                self?.statusItem.button?.contentTintColor = n > 0 ? .systemOrange : nil
+            }
+        }
+
         if AX.isTrusted {
             startMonitors()
         } else {
@@ -38,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         PageManager.shared.startSwipeMonitor()
         PageManager.shared.restore()     // pages from last run; stray parked windows come back
         PageManager.shared.startFollowFocus()
+        SessionMonitor.shared.start()
         if AutoArrange.shared.enabled { AutoArrange.shared.startWatching() }
     }
 
@@ -82,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item("Tile all windows  (⌃⌥T)") { PageManager.shared.tileAll() })
         let auto = AutoArrange.shared
         menu.addItem(item("Arrange everything  (⌃⌥A)") { auto.arrangeEverything() })
+        menu.addItem(item("Arrange by project  (⌃⌥P)") { auto.arrangeEverything(byProject: true) })
         let mode = item("Auto-arrange mode") {
             auto.enabled.toggle()
             if auto.enabled { auto.arrangeEverything() }
@@ -126,6 +138,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         projects.addItem(item("Edit layouts file…") { NSWorkspace.shared.open(store.fileURL) })
         menu.addItem(submenu("Projects", projects))
+        let claude = NSMenu()
+        let sm = SessionMonitor.shared
+        if !ClaudeHooks.isInstalled {
+            claude.addItem(item("Install Claude Code hooks…") { ClaudeHooks.promptInstall() })
+        } else if sm.sessions.isEmpty {
+            claude.addItem(item("No active sessions yet (they appear from their next prompt)") {})
+        }
+        for s in sm.sessions {
+            let mark = s.state == .waiting ? "🟠" : s.state == .working ? "🔵" : "🟢"
+            let label = s.state == .waiting ? "needs you" : s.state == .working ? "working" : "done"
+            claude.addItem(item("\(mark)  \(s.project) — \(label)") {
+                guard let w = sm.window(for: s) else { return }
+                if let i = PageManager.shared.pageIndex(of: w), i != PageManager.shared.current {
+                    PageManager.shared.go(to: i, focus: w)
+                } else { w.focus() }
+            })
+        }
+        claude.addItem(.separator())
+        claude.addItem(item("Jump to next waiting  (⌃⌥W)") { sm.jumpToWaiting() })
+        let frames = item("Show coloured frames") { StatusBorders.shared.enabled.toggle() }
+        frames.state = StatusBorders.shared.enabled ? .on : .off
+        claude.addItem(frames)
+        let waitingN = sm.waitingCount
+        menu.addItem(submenu(waitingN > 0 ? "Claude sessions — \(waitingN) need you" : "Claude sessions (\(sm.sessions.count))", claude))
+
         let desk = NSMenu()
         let desktops = Spaces.desktops()
         if Spaces.isAvailable && !desktops.isEmpty {

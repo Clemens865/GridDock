@@ -12,6 +12,7 @@ final class ShortcutSheet: NSObject, NSWindowDelegate {
             ("⌃⌥L", "Next grid layout"),
             ("⌃⌥T", "Tile all windows (grid sized to however many there are)"),
             ("⌃⌥A", "Arrange everything: all apps from every desktop & fullscreen onto pages"),
+            ("⌃⌥P", "Arrange by project: one page per project (Terminal folder, window titles)"),
             ("⌥ + drag", "Drag a window while holding ⌥ and drop it on a cell"),
         ]),
         ("Pages", [
@@ -21,6 +22,7 @@ final class ShortcutSheet: NSObject, NSWindowDelegate {
             ("⌃⌥N", "New empty page"),
         ]),
         ("Windows", [
+            ("⌃⌥W", "Jump to the next Claude session that needs you"),
             ("⌃⌥D", "Overview of all cells, pages and windows"),
             ("from another desktop", "Any placement carries the window to the grid desktop (set in the menu)"),
             ("⌃⌥H", "This list"),

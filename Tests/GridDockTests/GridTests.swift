@@ -57,3 +57,14 @@ final class GridTests: XCTestCase {
         XCTAssertNil(CellKeys.index(for: "#"))
     }
 }
+
+final class ProjectNameTests: XCTestCase {
+    func testProjectNames() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        XCTAssertEqual(AutoArrange.projectName(forPath: home + "/Documents/Software-Projects/TaxMex"), "TaxMex")
+        XCTAssertEqual(AutoArrange.projectName(forPath: home + "/Documents/Software-Projects/Atelier/packages/app"), "Atelier")
+        XCTAssertEqual(AutoArrange.projectName(forPath: "/tmp/scratch"), "scratch")
+        XCTAssertNil(AutoArrange.projectName(forPath: home))
+        XCTAssertNil(AutoArrange.projectName(forPath: ""))
+    }
+}

@@ -44,6 +44,31 @@ enum TerminalBridge {
         return result
     }
 
+    /// [tty: window ID] for every tab of every Terminal window (a session in a background tab maps to its window).
+    /// Terminal's AppleScript window id is the system window number, which — unlike the title — never changes.
+    static func windowIDsByTTY() -> [String: CGWindowID] {
+        guard !NSRunningApplication.runningApplications(withBundleIdentifier: ProjectLayoutStore.terminalBundleID).isEmpty else { return [:] }
+        let script = """
+        set out to ""
+        tell application "Terminal"
+            repeat with w in windows
+                set n to id of w
+                repeat with t in tabs of w
+                    set out to out & (tty of t) & "\t" & n & linefeed
+                end repeat
+            end repeat
+        end tell
+        return out
+        """
+        guard let text = runAppleScript(script)?.stringValue else { return [:] }
+        var result: [String: CGWindowID] = [:]
+        for line in text.split(separator: "\n") {
+            let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
+            if parts.count == 2, let id = CGWindowID(parts[1]) { result[parts[0]] = id }
+        }
+        return result
+    }
+
     /// Working directory of the shell running on a tty like "/dev/ttys003".
     private static func cwd(ofTTY tty: String) -> String? {
         let name = tty.replacingOccurrences(of: "/dev/", with: "")
