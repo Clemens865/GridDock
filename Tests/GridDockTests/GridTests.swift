@@ -68,3 +68,24 @@ final class ProjectNameTests: XCTestCase {
         XCTAssertNil(AutoArrange.projectName(forPath: ""))
     }
 }
+
+final class DragSnapTests: XCTestCase {
+    private let start = CGRect(x: 100, y: 100, width: 800, height: 600)
+
+    func testWindowMoveIsDetected() {
+        let moved = start.offsetBy(dx: 30, dy: 10)
+        XCTAssertEqual(DragSnap.classify(start: start, now: moved, mouseTravel: 32), .windowMove)
+    }
+
+    func testClickOnToolbarOrMenuIsNotAMove() {
+        // Cursor wiggles a few pixels, window stays put: keep waiting, don't show the grid.
+        XCTAssertEqual(DragSnap.classify(start: start, now: start, mouseTravel: 8), .undecided)
+        // Long drag inside the window (text selection, tab drag, menu tracking): never a move.
+        XCTAssertEqual(DragSnap.classify(start: start, now: start, mouseTravel: 120), .other)
+    }
+
+    func testResizeIsNotAMove() {
+        let resized = CGRect(x: 80, y: 100, width: 820, height: 600)
+        XCTAssertEqual(DragSnap.classify(start: start, now: resized, mouseTravel: 20), .other)
+    }
+}

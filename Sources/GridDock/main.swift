@@ -184,7 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(submenu("Grid lives on: Desktop \(Spaces.homeNumber)", desk))
         menu.addItem(.separator())
 
-        let snap = item("Snap on every drag (otherwise hold ⌥)") { DragSnap.shared.snapOnEveryDrag.toggle() }
+        let snap = item("Show grid when dragging a window (otherwise hold ⌥)") { DragSnap.shared.snapOnEveryDrag.toggle() }
         snap.state = DragSnap.shared.snapOnEveryDrag ? .on : .off
         menu.addItem(snap)
 
