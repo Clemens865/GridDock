@@ -3,3 +3,8 @@ build/
 .swiftpm/
 *.xcodeproj/xcuserdata/
 .DS_Store
+
+# Ruflo / claude-flow tooling
+.claude-flow/
+.swarm/
+ruvector.db
