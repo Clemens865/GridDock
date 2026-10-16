@@ -50,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         PageManager.shared.startFollowFocus()
         SessionMonitor.shared.start()
         if AutoArrange.shared.enabled { AutoArrange.shared.startWatching() }
+        GapFill.shared.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -187,6 +188,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let snap = item("Show grid when dragging a window (otherwise hold ⌥)") { DragSnap.shared.snapOnEveryDrag.toggle() }
         snap.state = DragSnap.shared.snapOnEveryDrag ? .on : .off
         menu.addItem(snap)
+
+        let fill = item("Fill empty cells (neighbours grow into gaps)") { GapFill.shared.enabled.toggle() }
+        fill.state = GapFill.shared.enabled ? .on : .off
+        menu.addItem(fill)
+
+        let smart = item("Smart tiling (edges, gaps, splits, swaps, push through)") { Tiler.shared.enabled.toggle() }
+        smart.state = Tiler.shared.enabled ? .on : .off
+        menu.addItem(smart)
+
+        let shared = item("Keep a shared grid") { Tiler.shared.sharedGrid.toggle() }
+        shared.state = Tiler.shared.sharedGrid ? .on : .off
+        menu.addItem(shared)
 
         let login = item("Launch at login") {
             let svc = SMAppService.mainApp

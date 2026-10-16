@@ -7,6 +7,17 @@ final class OverlayView: NSView {
     var showHints = true
     var onClickCell: ((Int, Bool) -> Void)?   // (cell, shiftHeld)
 
+    /// A window's future frame while a drag or resize is previewed (AX coordinates).
+    struct Ghost {
+        enum Role { case target, partner, other }
+        let frame: CGRect
+        let role: Role
+        let label: String?
+    }
+    /// When set, the view draws these instead of the grid's cells.
+    var ghosts: [Ghost]? { didSet { needsDisplay = true } }
+    var caption = "" { didSet { needsDisplay = true } }
+
     override var isFlipped: Bool { true }
 
     /// Cell rect in this view's coordinates.
@@ -17,6 +28,7 @@ final class OverlayView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        if let ghosts { return drawPreview(ghosts) }
         NSColor.black.withAlphaComponent(0.25).setFill()
         bounds.fill()
         let layout = GridManager.shared.layout
@@ -49,6 +61,38 @@ final class OverlayView: NSView {
             NSBezierPath(roundedRect: box, xRadius: 8, yRadius: 8).fill()
             hint.draw(at: CGPoint(x: box.minX + 14, y: box.minY + 7), withAttributes: attrs)
         }
+    }
+
+    private func drawPreview(_ ghosts: [Ghost]) {
+        NSColor.black.withAlphaComponent(0.18).setFill()
+        bounds.fill()
+        let screenAX = ScreenGeometry.flip(screenRef.frame)
+        let accent = NSColor.controlAccentColor, swap = NSColor.systemOrange
+        for g in ghosts {
+            let r = g.frame.offsetBy(dx: -screenAX.minX, dy: -screenAX.minY).insetBy(dx: 2, dy: 2)
+            let path = NSBezierPath(roundedRect: r, xRadius: 12, yRadius: 12)
+            let color = g.role == .other ? NSColor.white : g.role == .partner ? swap : accent
+            color.withAlphaComponent(g.role == .other ? 0.10 : 0.35).setFill()
+            path.fill()
+            color.withAlphaComponent(g.role == .other ? 0.75 : 1).setStroke()
+            path.lineWidth = g.role == .other ? 2 : 3
+            if g.role == .other { path.setLineDash([10, 6], count: 2, phase: 0) }
+            path.stroke()
+            if let text = g.label as NSString? {
+                let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: min(28, r.height / 5), weight: .semibold),
+                                                            .foregroundColor: NSColor.white]
+                let size = text.size(withAttributes: attrs)
+                text.draw(at: CGPoint(x: r.midX - size.width / 2, y: r.midY - size.height / 2), withAttributes: attrs)
+            }
+        }
+        guard !caption.isEmpty else { return }
+        let text = caption as NSString
+        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 15, weight: .medium), .foregroundColor: NSColor.white]
+        let size = text.size(withAttributes: attrs)
+        let box = CGRect(x: bounds.midX - size.width / 2 - 16, y: bounds.maxY - 72, width: size.width + 32, height: size.height + 16)
+        NSColor.black.withAlphaComponent(0.75).setFill()
+        NSBezierPath(roundedRect: box, xRadius: 9, yRadius: 9).fill()
+        text.draw(at: CGPoint(x: box.minX + 16, y: box.minY + 8), withAttributes: attrs)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -143,6 +187,7 @@ final class OverlayController {
         guard let t = target else { return cancel() }
         hide()
         GridManager.shared.place(t, inCells: cells, on: screen)
+        GapFill.shared.fill(dropped: t, into: cells)
         t.focus()
     }
 
@@ -158,7 +203,18 @@ final class OverlayController {
     }
 
     func updateDrag(highlight cell: Int?, on screen: NSScreen) {
-        for (_, view) in windows { view.highlighted = (view.screenRef == screen && cell != nil) ? [cell!] : [] }
+        for (_, view) in windows { view.ghosts = nil; view.highlighted = (view.screenRef == screen && cell != nil) ? [cell!] : [] }
+    }
+
+    /// Shows the frames windows would get on `screen` (the other screens stay clear).
+    func showPreview(_ ghosts: [OverlayView.Ghost], caption: String, on screen: NSScreen) {
+        showDrag()
+        for (win, view) in windows {
+            let here = view.screenRef == screen
+            view.ghosts = here ? ghosts : []
+            view.caption = here ? caption : ""
+            here ? win.orderFrontRegardless() : win.orderOut(nil)
+        }
     }
 
     func hide() {

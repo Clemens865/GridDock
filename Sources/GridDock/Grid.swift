@@ -19,7 +19,8 @@ struct GridLayout: Codable, Equatable {
     }
 
     /// Grid sized for `count` windows: picks the column count whose cells are closest to a
-    /// pleasant shape on this screen; a shorter last row is stretched to the full width.
+    /// pleasant shape on this screen. When the last row is short, the windows above its empty
+    /// cells reach down to the bottom, so every column keeps its width and nothing is left empty.
     static func auto(count: Int, screenAspect: CGFloat = 16.0 / 10.0) -> GridLayout {
         let n = max(1, count)
         var best = (cols: 1, score: CGFloat.infinity)
@@ -30,16 +31,61 @@ struct GridLayout: Codable, Equatable {
             let score = abs(log(cellAspect / 0.9)) + empty * 0.3
             if score < best.score { best = (cols, score) }
         }
-        let rows = Int(ceil(Double(n) / Double(best.cols)))
+        let cols = best.cols
+        let rows = Int(ceil(Double(n) / Double(cols)))
         var cells: [CGRect] = []
-        for r in 0..<rows {
-            let inRow = min(best.cols, n - r * best.cols)
-            for c in 0..<inRow {
-                cells.append(CGRect(x: CGFloat(c) / CGFloat(inRow), y: CGFloat(r) / CGFloat(rows),
-                                    width: 1 / CGFloat(inRow), height: 1 / CGFloat(rows)))
-            }
+        for k in 0..<n {
+            let r = k / cols, c = k % cols
+            let reachesDown = r == rows - 2 && k + cols >= n
+            cells.append(CGRect(x: CGFloat(c) / CGFloat(cols), y: CGFloat(r) / CGFloat(rows),
+                                width: 1 / CGFloat(cols), height: CGFloat(reachesDown ? 2 : 1) / CGFloat(rows)))
         }
         return GridLayout(name: "Auto (\(n))", cells: cells)
+    }
+
+    // MARK: Filling empty cells
+
+    /// Bounding box of some cells (normalized coordinates).
+    func bounds(of set: Set<Int>) -> CGRect? {
+        let rects = set.filter { cells.indices.contains($0) }.map { cells[$0] }
+        guard let first = rects.first else { return nil }
+        return rects.dropFirst().reduce(first) { $0.union($1) }
+    }
+
+    /// True when the cells together form one solid rectangle (so one window can cover them).
+    func isRectangle(_ set: Set<Int>) -> Bool {
+        guard let b = bounds(of: set) else { return false }
+        let area = set.reduce(CGFloat(0)) { $0 + cells[$1].width * cells[$1].height }
+        return abs(area - b.width * b.height) < 1e-6
+    }
+
+    /// Grows the given spans (one per window) into empty cells, so the grid has no holes.
+    /// An empty cell goes to the window above it first, then left, right, below — and only
+    /// when the window still covers a rectangle afterwards. `blocked` cells are never taken.
+    func filling(_ spans: [Set<Int>], blocked: Set<Int> = []) -> [Set<Int>] {
+        var spans = spans
+        let taken = spans.reduce(into: blocked) { $0.formUnion($1) }
+        var empty = Set(cells.indices).subtracting(taken)
+        func near(_ a: CGFloat, _ b: CGFloat) -> Bool { abs(a - b) < 1e-6 }
+        var progress = true
+        while progress && !empty.isEmpty {
+            progress = false
+            for e in empty.sorted() {
+                let c = cells[e]
+                var best: (rank: Int, index: Int)?
+                for (i, s) in spans.enumerated() where !s.isEmpty && isRectangle(s.union([e])) {
+                    guard let b = bounds(of: s) else { continue }
+                    let rank = near(b.maxY, c.minY) ? 0 : near(b.maxX, c.minX) ? 1 : near(b.minX, c.maxX) ? 2 : 3
+                    if best == nil || rank < best!.rank { best = (rank, i) }
+                }
+                if let b = best {
+                    spans[b.index].insert(e)
+                    empty.remove(e)
+                    progress = true
+                }
+            }
+        }
+        return spans
     }
 
     /// Splits items into the fewest pages of at most `perPage`, as evenly as possible (14 by 6 → 5, 5, 4).

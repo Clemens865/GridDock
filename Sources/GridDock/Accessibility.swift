@@ -120,6 +120,22 @@ enum AX {
         }
     }
 
+    /// The window server's frame for a window (AX coordinates). Unlike the AX frame, it stays current
+    /// while the user drags: many apps only report their new AX position once the mouse is released.
+    static func serverFrame(_ id: CGWindowID) -> CGRect? {
+        guard let info = (CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]])?.first,
+              let b = info[kCGWindowBounds as String] as? [String: CGFloat] else { return nil }
+        return CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0)
+    }
+
+    /// The AX window behind a window-server ID (nil for windows of non-regular apps, like Stage Manager's strip).
+    static func window(withID id: CGWindowID) -> AXWindow? {
+        guard let info = (CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]])?.first,
+              let pid = info[kCGWindowOwnerPID as String] as? pid_t,
+              let app = NSRunningApplication(processIdentifier: pid), app.activationPolicy == .regular else { return nil }
+        return windows(of: app).first { Spaces.windowID($0) == id }
+    }
+
     /// Window whose frame contains the given AX point, front-most first (uses the CG window list for z-order).
     static func window(at p: CGPoint) -> AXWindow? {
         let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []

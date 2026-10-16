@@ -82,6 +82,7 @@ final class GridManager {
     func placeFocused(inCell index: Int) {
         guard let w = AX.focusedWindow() else { NSSound.beep(); return }
         place(w, inCells: [index])
+        GapFill.shared.fill(dropped: w, into: [index])
     }
 
     /// Cell index whose rect contains the AX point on the given screen.

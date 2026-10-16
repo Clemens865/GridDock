@@ -46,8 +46,13 @@ final class PageManager {
     private func stashCurrent(on screen: NSScreen) {
         let occupancy = GridManager.shared.occupancy(on: screen)
         var slots: [Slot] = []
+        let layout = GridManager.shared.layout
         for (cell, wins) in occupancy {
-            for w in wins { slots.append(Slot(window: w, cells: [cell])) }
+            for w in wins {
+                // Keep spans (a window grown over several cells) when coming back to this page.
+                let span = w.frame.flatMap { GapFill.snappedCells($0, layout: layout, on: screen) }
+                slots.append(Slot(window: w, cells: span?.sorted() ?? [cell]))
+            }
         }
         pages[current].layout = GridManager.shared.layout
         pages[current].slots = slots
@@ -180,13 +185,19 @@ final class PageManager {
     /// Lays out exactly these windows on the visible page in an auto-sized grid.
     func tile(_ windows: [AXWindow], on screen: NSScreen? = nil) {
         let screen = screen ?? activeScreen
-        let gm = GridManager.shared
         currentWindows = windows
         guard !windows.isEmpty else { return }
         let vf = screen.visibleFrame
-        gm.layout = .auto(count: windows.count, screenAspect: vf.width / max(vf.height, 1))
+        adopt(.auto(count: windows.count, screenAspect: vf.width / max(vf.height, 1)), windows: windows, on: screen)
+    }
+
+    /// Shows these windows on the visible page in the given layout, window i in cell i.
+    func adopt(_ layout: GridLayout, windows: [AXWindow], on screen: NSScreen) {
+        let gm = GridManager.shared
+        gm.layout = layout
         for (i, w) in windows.enumerated() { gm.place(w, inCells: [i], on: screen) }
-        pages[current].layout = gm.layout
+        currentWindows = windows
+        pages[current].layout = layout
         pages[current].slots = windows.enumerated().map { Slot(window: $1, cells: [$0]) }
         save()
     }
@@ -274,7 +285,11 @@ final class PageManager {
 
 extension PageManager {
     private struct SavedSlot: Codable { let windowID: UInt32?; let bundleID: String?; let title: String; let cells: [Int] }
-    private struct SavedPage: Codable { let name: String?; let layoutName: String; let slots: [SavedSlot] }
+    private struct SavedPage: Codable {
+        let name: String?; let layoutName: String; let slots: [SavedSlot]
+        /// Cells of a layout that can't be rebuilt from its name (a stretched "Custom" grid).
+        var cells: [CGRect]? = nil
+    }
     private struct Saved: Codable { let current: Int; let pages: [SavedPage] }
 
     private static var fileURL: URL {
@@ -285,7 +300,7 @@ extension PageManager {
         let saved = Saved(current: current, pages: pages.map { p in
             SavedPage(name: p.name, layoutName: p.layout.name, slots: p.slots.map { s in
                 SavedSlot(windowID: Spaces.windowID(s.window), bundleID: s.window.bundleID, title: s.window.title, cells: s.cells)
-            })
+            }, cells: GridLayout.resolve(p.layout.name) == nil ? p.layout.cells : nil)
         })
         try? JSONEncoder().encode(saved).write(to: Self.fileURL)
     }
@@ -306,7 +321,8 @@ extension PageManager {
         }
         var restored: [Page] = []
         for p in saved.pages {
-            let layout = GridLayout.resolve(p.layoutName) ?? GridManager.shared.layout
+            let layout = GridLayout.resolve(p.layoutName)
+                ?? p.cells.map { GridLayout(name: p.layoutName, cells: $0) } ?? GridManager.shared.layout
             let slots = p.slots.compactMap { s in take(s).map { Slot(window: $0, cells: s.cells) } }
             if !slots.isEmpty || restored.isEmpty { restored.append(Page(layout: layout, slots: slots, name: p.name)) }
         }
